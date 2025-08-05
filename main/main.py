@@ -950,15 +950,10 @@ BASE_PATH = tempfile.gettempdir()
 PARSED_TEXT_OUTPUT_FOLDER = os.path.join(BASE_PATH, "Parsed_text")
 FAISS_INDEX_OUTPUT_FOLDER = os.path.join(BASE_PATH, "faiss_index")
 
-AGGREGATED_CHUNKS_FILENAME = 'all_policy_chunks.jsonl'
-FAISS_INDEX_FILENAME = 'policy_chunks_faiss_index.bin'
-FAISS_METADATA_FILENAME = 'policy_chunks_metadata.json'
+EMBEDDING_MODEL_NAME = 'BAAI/bge-small-en-v1.5'
+TOP_K_RETRIEVAL = 2
 
-# Optimized for lower memory usage:
-EMBEDDING_MODEL_NAME = 'BAAI/bge-small-en-v1.5'  # Smaller model
-TOP_K_RETRIEVAL = 2                             # Reduced number of retrievals
-
-# Ensure temp folders exist
+# Create temp folders if not present
 os.makedirs(PARSED_TEXT_OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(FAISS_INDEX_OUTPUT_FOLDER, exist_ok=True)
 
@@ -1005,9 +1000,11 @@ def parse_and_chunk_pdf(file_path: str) -> List[Dict[str, Any]]:
     if not all_page_texts:
         return []
 
-    # Larger chunk size, less overlap to reduce chunk count and memory
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1500, chunk_overlap=50, length_function=len, is_separator_regex=False
+        chunk_size=1500,
+        chunk_overlap=50,
+        length_function=len,
+        is_separator_regex=False,
     )
 
     processed_chunks = []
@@ -1016,16 +1013,18 @@ def parse_and_chunk_pdf(file_path: str) -> List[Dict[str, Any]]:
         for chunk_content in chunks_from_page:
             clean_chunk = " ".join(chunk_content.split()).strip()
             if clean_chunk:
-                processed_chunks.append({
-                    "content": clean_chunk,
-                    "metadata": {
-                        "page_number": page_info["page_number"],
-                        "source_file": os.path.basename(file_path),
-                    },
-                })
+                processed_chunks.append(
+                    {
+                        "content": clean_chunk,
+                        "metadata": {
+                            "page_number": page_info["page_number"],
+                            "source_file": os.path.basename(file_path),
+                        },
+                    }
+                )
     return processed_chunks
 
-# Load SentenceTransformer model once
+# Load embedding model once globally
 embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
 def clean_query(query: str) -> str:
@@ -1072,7 +1071,9 @@ Only include non-null entities. Omit any missing or irrelevant ones.
         messages = [{"role": "user", "content": prompt}]
         llm_output_str = await call_llm_api(messages, json_output=True)
         parsed = json.loads(llm_output_str)
-        parsed["extracted_entities"] = {k: v for k, v in parsed.get("extracted_entities", {}).items() if v is not None}
+        parsed["extracted_entities"] = {
+            k: v for k, v in parsed.get("extracted_entities", {}).items() if v is not None
+        }
         return parsed
     except Exception:
         return {"corrected_and_rephrased_query": clean_query(raw_query), "extracted_entities": {}}
@@ -1085,10 +1086,17 @@ def construct_rag_prompt(
 USER QUERY:
 {user_query}"""
     context_text = "\n\n".join(
-        [f"--- Document: {chunk.get('source_file', 'Unknown')}, Page: {chunk.get('page_number', 'N/A')} ---\n{chunk.get('content', '') or chunk.get('text', '')}"
-         for chunk in context_chunks]
+        [
+            f"--- Document: {chunk.get('source_file', 'Unknown')}, Page: {chunk.get('page_number', 'N/A')} ---\n"
+            f"{chunk.get('content', '') or chunk.get('text', '')}"
+            for chunk in context_chunks
+        ]
     )
-    entity_lines = "\n".join([f"- {k}: {v}" for k, v in extracted_entities.items()]) if extracted_entities else "None"
+    entity_lines = (
+        "\n".join([f"- {k}: {v}" for k, v in extracted_entities.items()])
+        if extracted_entities
+        else "None"
+    )
     return f"""You are an expert insurance assistant.
 USER QUERY:
 {user_query}
